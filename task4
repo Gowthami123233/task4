@@ -1,0 +1,109 @@
+from flask import Flask, request, jsonify, abort, url_for
+
+
+app = Flask(__name__)
+
+
+# In-memory user store
+# Key: integer user_id, Value: dict with user data
+users = {}
+next_user_id = 1
+
+
+def validate_user_payload(payload, *, partial=False):
+	"""Validate incoming JSON for user. If partial=True, allow missing fields."""
+	if not isinstance(payload, dict):
+		abort(400, description="Invalid JSON body")
+
+	allowed_fields = {"name", "email", "age"}
+	unknown = set(payload.keys()) - allowed_fields
+	if unknown:
+		abort(400, description=f"Unknown fields: {', '.join(sorted(unknown))}")
+
+	if not partial:
+		for required in ("name", "email"):
+			if required not in payload:
+				abort(400, description=f"Missing required field: {required}")
+
+	if "name" in payload and not isinstance(payload["name"], str):
+		abort(400, description="Field 'name' must be a string")
+	if "email" in payload and not isinstance(payload["email"], str):
+		abort(400, description="Field 'email' must be a string")
+	if "age" in payload and payload["age"] is not None and not isinstance(payload["age"], int):
+		abort(400, description="Field 'age' must be an integer if provided")
+
+	return True
+
+
+@app.errorhandler(400)
+def handle_bad_request(err):
+	return jsonify({"error": "bad_request", "message": err.description}), 400
+
+
+@app.errorhandler(404)
+def handle_not_found(err):
+	return jsonify({"error": "not_found", "message": "Resource not found"}), 404
+
+
+@app.get("/users")
+def list_users():
+	return jsonify(list(users.values())), 200
+
+
+@app.get("/users/<int:user_id>")
+def get_user(user_id):
+	user = users.get(user_id)
+	if not user:
+		abort(404)
+	return jsonify(user), 200
+
+
+@app.post("/users")
+def create_user():
+	global next_user_id
+	payload = request.get_json(silent=True) or {}
+	validate_user_payload(payload)
+
+	user_id = next_user_id
+	next_user_id += 1
+	user = {
+		"id": user_id,
+		"name": payload["name"],
+		"email": payload["email"],
+		"age": payload.get("age"),
+	}
+	users[user_id] = user
+
+	location = url_for("get_user", user_id=user_id, _external=False)
+	response = jsonify(user)
+	response.status_code = 201
+	response.headers["Location"] = location
+	return response
+
+
+@app.put("/users/<int:user_id>")
+def update_user(user_id):
+	if user_id not in users:
+		abort(404)
+	payload = request.get_json(silent=True) or {}
+	validate_user_payload(payload, partial=True)
+
+	# Full or partial update
+	user = users[user_id]
+	for field in ("name", "email", "age"):
+		if field in payload:
+			user[field] = payload[field]
+	return jsonify(user), 200
+
+
+@app.delete("/users/<int:user_id>")
+def delete_user(user_id):
+	if user_id not in users:
+		abort(404)
+	deleted = users.pop(user_id)
+	return jsonify({"deleted": deleted["id"]}), 200
+
+
+if __name__ == "__main__":
+	# Run the development server
+	app.run(host="127.0.0.1", port=5000, debug=True)
